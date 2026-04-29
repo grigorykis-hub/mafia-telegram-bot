@@ -1,5 +1,9 @@
 # Telegram-бот для набора игроков в Мафию
 
+**Репозиторий:** https://github.com/grigorykis-hub/mafia-telegram-bot  
+
+**Готовый Docker-образ (GHCR):** `ghcr.io/grigorykis-hub/mafia-telegram-bot:latest` — после первого успешного **Actions → Publish Docker image** пакет появится в GitHub → **Packages**. Чтобы тянуть образ на VPS без `docker login`, откройте пакет → **Package settings** → **Change package visibility** → **Public** (или выполните `docker login ghcr.io` с Personal Access Token, scope `read:packages`).
+
 Бот позволяет:
 - показывать в главном меню предстоящие игры, прошедшие игры и календарь;
 - записывать участников на выбранную игру;
@@ -10,7 +14,8 @@
 ## 1) Установка
 
 ```bash
-cd "/Users/grigorykisilgof/Desktop/AI/Чат бот Мафия"
+git clone https://github.com/grigorykis-hub/mafia-telegram-bot.git
+cd mafia-telegram-bot
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -73,7 +78,7 @@ chmod +x run.sh
    chmod +x scripts/vps-install-docker.sh
    ./scripts/vps-install-docker.sh
    ```
-3. Скопируйте папку проекта на сервер (scp, git clone, архив — как удобно).
+3. Скопируйте папку на сервер, например: `git clone https://github.com/grigorykis-hub/mafia-telegram-bot.git && cd mafia-telegram-bot`.
 4. На сервере: `cp .env.example .env` и заполните `BOT_TOKEN`, `ADMIN_IDS`, при необходимости `ADMIN_USERNAMES`.
 5. Запуск в фоне + автоперезапуск после ребута:
    ```bash
@@ -84,16 +89,16 @@ chmod +x run.sh
 
 База SQLite хранится в Docker-томе `mafia_sqlite` → файл `/data/mafia_bot.db` внутри контейнера.
 
-### Шаг B — образ из GitHub (без сборки на сервере)
+### Шаг B — образ из GHCR (без сборки на сервере)
 
-1. Залейте проект в репозиторий GitHub (ветка `main` или `master`).
-2. Включите **Actions**: workflow **Publish Docker image** соберёт образ и опубликует в **GitHub Container Registry** (`ghcr.io/ВАШ_ЛОГИН/ИМЯ_РЕПО:latest`). Первый запуск: в репозитории → **Packages** → сделайте пакет **public** или авторизуйтесь на VPS (`docker login ghcr.io`).
-3. На VPS создайте `.env` и запустите по примеру `docker-compose.image.example.yml`:
+1. В репозитории уже есть workflow **Publish Docker image**; при каждом push в `main` (изменения в `Dockerfile`, `docker-compose*.yml`, `requirements.txt`, `**.py`) образ публикуется в **GHCR**.
+2. Образ: **`ghcr.io/grigorykis-hub/mafia-telegram-bot:latest`**. Для `docker pull` без логина сделайте пакет **Public** (GitHub → **Packages** → пакет → **Package settings**) или один раз: `docker login ghcr.io` (PAT с `read:packages`).
+3. На VPS: скопируйте `.env.example` в `.env`, заполните секреты, затем:
    ```bash
-   export IMAGE=ghcr.io/ваш_логин/ваш_репо:latest
+   export IMAGE=ghcr.io/grigorykis-hub/mafia-telegram-bot:latest
    docker compose -f docker-compose.image.example.yml up -d
    ```
-   Обновление образа: `export IMAGE=...` и `make pull-up-image`.
+   Обновление: `export IMAGE=ghcr.io/grigorykis-hub/mafia-telegram-bot:latest && make pull-up-image`.
 
 ### Шаг C — Render.com
 

@@ -10,6 +10,7 @@ on:
     paths:
       - Dockerfile
       - docker-compose.yml
+      - docker-compose.image.example.yml
       - requirements.txt
       - "**.py"
   workflow_dispatch:
