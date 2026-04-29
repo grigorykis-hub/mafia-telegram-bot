@@ -411,18 +411,22 @@ async def calendar_games(message: Message) -> None:
         await message.answer(html_calendar_empty())
         return
 
+    game_ids = [int(g["id"]) for g in games]
+    reg_by_game = await DB.get_registration_counts(game_ids)
+
     grouped: dict[str, list[str]] = {}
     for game in games:
         dt = datetime.strptime(game["game_date"], DB_DATE_FORMAT)
         day_key = dt.strftime("%d.%m.%Y")
-        reg_count = await DB.get_registration_count(game["id"])
+        gid = int(game["id"])
+        reg_count = reg_by_game.get(gid, 0)
         cap = int(game["capacity"])
         free = max(cap - reg_count, 0)
         block = (
-            f"• <b>{html.escape(day_key)}</b> · <code>{dt.strftime('%H:%M')}</code> — "
-            f"<b>{html.escape(game['title'])}</b>\n"
-            f"  Стол: <i>{html.escape(direction_to_human(game['direction']))}</i> · "
-            f"свободно <b>{free}</b> из <b>{cap}</b> мест"
+            f"• <b>{html.escape(day_key)}</b> · <code>{dt.strftime('%H:%M')}</code>"
+            f" — свободно <b>{free}</b> из <b>{cap}</b> мест\n"
+            f"  <b>{html.escape(game['title'])}</b>\n"
+            f"  Стол: <i>{html.escape(direction_to_human(game['direction']))}</i>"
         )
         grouped.setdefault(day_key, []).append(block)
 

@@ -156,6 +156,25 @@ class Database:
             row = await cursor.fetchone()
             return int(row[0]) if row else 0
 
+    async def get_registration_counts(self, game_ids: list[int]) -> dict[int, int]:
+        if not game_ids:
+            return {}
+        out = {int(gid): 0 for gid in game_ids}
+        placeholders = ",".join("?" * len(game_ids))
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                f"""
+                SELECT game_id, COUNT(*) AS c FROM registrations
+                WHERE game_id IN ({placeholders})
+                GROUP BY game_id
+                """,
+                game_ids,
+            )
+            rows = await cursor.fetchall()
+            for game_id, c in rows:
+                out[int(game_id)] = int(c)
+        return out
+
     async def register_user(
         self,
         *,
