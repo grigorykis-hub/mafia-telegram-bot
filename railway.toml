@@ -1,0 +1,12 @@
+# Railway: новый проект → Deploy from GitHub → этот репозиторий.
+# В настройках сервиса: Variables → BOT_TOKEN, ADMIN_IDS, ADMIN_USERNAMES (если нужно), DB_PATH=/data/mafia_bot.db
+# Volumes → Add volume → mount path: /data
+# Без тома SQLite потеряется при каждом деплое.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

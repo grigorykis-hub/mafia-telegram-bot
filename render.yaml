@@ -1,7 +1,6 @@
-# Blueprint для Render.com: Background Worker + Docker.
-# Создайте новый Blueprint в Render, укажите этот репозиторий.
-# В панели задайте BOT_TOKEN, ADMIN_IDS, ADMIN_USERNAMES (секреты).
-# Диск нужен для SQLite; на бесплатном плане уточните в документации Render.
+# Blueprint Render.com: Background Worker + Docker + диск для SQLite.
+# Важно: у Render план free НЕ поддерживает background workers — нужен платный (starter и выше).
+# Создайте Blueprint → подключите репозиторий → при первом деплое укажите секреты.
 
 services:
   - type: worker
@@ -10,6 +9,7 @@ services:
     dockerfilePath: ./Dockerfile
     region: frankfurt
     plan: starter
+    branch: main
     envVars:
       - key: BOT_TOKEN
         sync: false

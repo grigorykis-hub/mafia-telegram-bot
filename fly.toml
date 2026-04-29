@@ -1,15 +1,19 @@
-# Fly.io: fly launch --no-deploy, затем fly volumes create mafia_data --region ams --size 1
-# Задайте секреты: fly secrets set BOT_TOKEN=... ADMIN_IDS=... ADMIN_USERNAMES=...
-# Деплой: fly deploy
+# Fly.io (бот 24/7): установите https://fly.io/docs/hands-on/install-flyctl/
+# 1) fly auth login
+# 2) fly apps create mafia-telegram-bot   # или другое уникальное имя
+# 3) fly volumes create mafia_data --region ams --size 1
+# 4) fly secrets set BOT_TOKEN=... ADMIN_IDS=... ADMIN_USERNAMES=...
+# 5) fly deploy
+# В fly.toml ниже замените app на имя из шага 2.
 
 app = "mafia-telegram-bot"
 primary_region = "ams"
 
 [build]
-  dockerfile = "Dockerfile"
+dockerfile = "Dockerfile"
 
 [env]
-  DB_PATH = "/data/mafia_bot.db"
+DB_PATH = "/data/mafia_bot.db"
 
 [mounts]
 source = "mafia_data"
