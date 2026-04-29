@@ -1,0 +1,25 @@
+# Blueprint для Render.com: Background Worker + Docker.
+# Создайте новый Blueprint в Render, укажите этот репозиторий.
+# В панели задайте BOT_TOKEN, ADMIN_IDS, ADMIN_USERNAMES (секреты).
+# Диск нужен для SQLite; на бесплатном плане уточните в документации Render.
+
+services:
+  - type: worker
+    name: mafia-telegram-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: frankfurt
+    plan: starter
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: ADMIN_USERNAMES
+        sync: false
+      - key: DB_PATH
+        value: /data/mafia_bot.db
+    disk:
+      name: mafia-sqlite
+      mountPath: /data
+      sizeGB: 1

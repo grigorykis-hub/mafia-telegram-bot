@@ -1,0 +1,28 @@
+# Пример: запуск готового образа с GitHub Container Registry (без сборки на сервере).
+# 1. Замените IMAGE на строку из GitHub → Actions → образ, например:
+#    ghcr.io/mylogin/mafia-bot:latest
+# 2. Скопируйте в docker-compose.image.yml или передайте через переменную окружения.
+#
+# Запуск:
+#   export BOT_TOKEN=... ADMIN_IDS=... ADMIN_USERNAMES=...
+#   export IMAGE=ghcr.io/you/repo:latest
+#   docker compose -f docker-compose.image.example.yml up -d
+#
+# Либо создайте .env рядом с тем же содержимым, что для основного бота.
+
+name: mafia-telegram-bot
+
+services:
+  mafia-bot:
+    image: ${IMAGE:?Задайте IMAGE=ghcr.io/владелец/репозиторий:latest}
+    container_name: mafia-telegram-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_PATH: /data/mafia_bot.db
+    volumes:
+      - mafia_sqlite:/data
+
+volumes:
+  mafia_sqlite:

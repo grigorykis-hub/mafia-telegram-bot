@@ -1,0 +1,16 @@
+# Fly.io: fly launch --no-deploy, затем fly volumes create mafia_data --region ams --size 1
+# Задайте секреты: fly secrets set BOT_TOKEN=... ADMIN_IDS=... ADMIN_USERNAMES=...
+# Деплой: fly deploy
+
+app = "mafia-telegram-bot"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DB_PATH = "/data/mafia_bot.db"
+
+[mounts]
+source = "mafia_data"
+destination = "/data"
