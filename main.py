@@ -423,9 +423,9 @@ async def calendar_games(message: Message) -> None:
         cap = int(game["capacity"])
         free = max(cap - reg_count, 0)
         block = (
-            f"• <b>{html.escape(day_key)}</b> · <code>{dt.strftime('%H:%M')}</code>"
-            f" — свободно <b>{free}</b> из <b>{cap}</b> мест\n"
+            f"• <b>{html.escape(day_key)}</b> · <code>{dt.strftime('%H:%M')}</code>\n"
             f"  <b>{html.escape(game['title'])}</b>\n"
+            f"  🪑 <b>Свободно мест:</b> {free} · <b>Всего мест:</b> {cap}\n"
             f"  Стол: <i>{html.escape(direction_to_human(game['direction']))}</i>"
         )
         grouped.setdefault(day_key, []).append(block)
