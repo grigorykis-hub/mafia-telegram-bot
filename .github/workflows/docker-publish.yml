@@ -12,6 +12,7 @@ on:
       - docker-compose.yml
       - docker-compose.image.example.yml
       - requirements.txt
+      - ".github/workflows/docker-publish.yml"
       - "**.py"
   workflow_dispatch:
 
