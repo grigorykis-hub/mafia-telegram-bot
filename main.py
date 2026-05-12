@@ -30,12 +30,18 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from config import Settings, load_settings
-from database import Database
+from database import (
+    MASTERCLASS_DIRECTION_STUB,
+    GAME_KIND_MASTERCLASS,
+    GAME_KIND_MAFIA,
+    Database,
+)
 from theme import (
     BTN_ADMIN,
     BTN_ADMIN_ADD_CAPO,
     BTN_ADMIN_BROADCAST,
     BTN_ADMIN_NEW_GAME,
+    BTN_ADMIN_NEW_MASTERCLASS,
     BTN_ADMIN_NOTIFY_GAME,
     BTN_ADMIN_PHOTOS,
     BTN_BACK,
@@ -44,21 +50,33 @@ from theme import (
     BTN_DIR_ADULT,
     BTN_DIR_CHILD,
     BTN_FINISH_UPLOAD,
+    BTN_MAFIA,
+    BTN_MASTERCLASS,
+    BTN_MASTERCLASS_SHORT,
     BTN_PAST,
     BTN_UPCOMING,
     LEGACY_ADMIN,
     LEGACY_ADMIN_ADD_CAPO,
     LEGACY_ADMIN_BROADCAST,
     LEGACY_ADMIN_NEW_GAME,
+    LEGACY_ADMIN_NEW_MASTERCLASS,
     LEGACY_ADMIN_PHOTOS,
     LEGACY_BACK,
     LEGACY_CALENDAR,
     LEGACY_CANCEL,
     LEGACY_FINISH_UPLOAD,
+    LEGACY_MAFIA,
+    LEGACY_MASTERCLASS,
+    LEGACY_MASTERCLASS_ALT,
+    LEGACY_MASTERCLASS_SHORT,
     LEGACY_PAST,
     LEGACY_UPCOMING,
     format_calendar_header,
     format_game_card,
+    html_mafia_hub,
+    html_masterclass_hub,
+    html_no_masterclasses,
+    html_pick_masterclass,
     html_access_denied,
     html_admin_panel,
     html_calendar_empty,
@@ -69,6 +87,7 @@ from theme import (
     html_pick_past,
     html_welcome,
     is_cancel_text,
+    MENU_BUILD_TAG,
     resolve_direction_choice,
 )
 
@@ -86,6 +105,14 @@ class AdminCreateGame(StatesGroup):
     date = State()
     direction = State()
     capacity = State()
+    price = State()
+
+
+class AdminCreateMasterclass(StatesGroup):
+    title = State()
+    date = State()
+    capacity = State()
+    price = State()
 
 
 class AdminUploadPhotos(StatesGroup):
@@ -117,14 +144,34 @@ def direction_to_human(direction: str) -> str:
     return "Взрослый стол" if direction == "adult" else "Детский стол"
 
 
-def _inline_game_caption(game: dict) -> str:
+def row_kind(game: dict) -> str:
+    return (game.get("kind") or GAME_KIND_MAFIA).strip() or GAME_KIND_MAFIA
+
+
+def row_price_html(game: dict) -> str:
+    s = (game.get("price_text") or "").strip()
+    return html.escape(s) if s else "<i>не указана</i>"
+
+
+def row_type_line_html(game: dict) -> str:
+    if row_kind(game) == GAME_KIND_MASTERCLASS:
+        return "🎓 <b>Формат:</b> мастер-класс"
+    return f"🎭 <b>Стол:</b> {html.escape(direction_to_human(game['direction']))}"
+
+
+def inline_event_caption(game: dict) -> str:
     """Подпись инлайн-кнопки (лимит Telegram ~64 символа)."""
     dt = to_user_datetime(game["game_date"])
     title = game["title"]
-    if len(title) > 22:
-        title = title[:21] + "…"
-    mark = "Взр." if game["direction"] == "adult" else "Дет."
-    raw = f"🎴 {dt} · {title} · {mark}"
+    if len(title) > 18:
+        title = title[:17] + "…"
+    if row_kind(game) == GAME_KIND_MASTERCLASS:
+        mark = "МК"
+        prefix = "🎓"
+    else:
+        mark = "Взр." if game["direction"] == "adult" else "Дет."
+        prefix = "🎴"
+    raw = f"{prefix} {dt} · {title} · {mark}"
     return raw if len(raw) <= 64 else raw[:61] + "…"
 
 
@@ -136,6 +183,14 @@ def normalize_username(username: str | None) -> str | None:
         return None
     s = username.strip().lstrip("@").lower()
     return s if s else None
+
+
+def is_version_slash_command(text: str | None) -> bool:
+    """В группах Telegram шлёт /version@BotName — стандартный Command без ignore_mention не ловит."""
+    if not text:
+        return False
+    head = text.strip().split()[0]
+    return head == "/version" or head.startswith("/version@")
 
 
 async def is_admin(user: User | None) -> bool:
@@ -154,31 +209,45 @@ async def is_admin(user: User | None) -> bool:
 
 async def main_menu_kb(user: User | None) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
-    kb.button(text=BTN_UPCOMING)
-    kb.button(text=BTN_PAST)
+    # Первая строка — мафия и мастер-класс рядом (на узких экранах столбец режет подписи).
+    kb.button(text=BTN_MAFIA)
+    kb.button(text=BTN_MASTERCLASS_SHORT)
     kb.button(text=BTN_CALENDAR)
     if await is_admin(user):
         kb.button(text=BTN_ADMIN)
+        kb.adjust(2, 2)
+    else:
+        kb.adjust(2, 1)
+    return kb.as_markup(resize_keyboard=True, is_persistent=False)
+
+
+def mafia_hub_kb() -> ReplyKeyboardMarkup:
+    kb = ReplyKeyboardBuilder()
+    kb.button(text=BTN_UPCOMING)
+    kb.button(text=BTN_PAST)
+    kb.button(text=BTN_BACK)
     kb.adjust(1)
     return kb.as_markup(resize_keyboard=True, is_persistent=True)
 
 
-async def _strip_reply_keyboard(message: Message) -> None:
-    """Сброс reply-клавиатуры; при сбое сети молча выходим — дальше всё равно шлём основное сообщение."""
-    try:
-        tmp = await message.answer("\u2060", reply_markup=ReplyKeyboardRemove())
-    except TelegramNetworkError:
-        return
-    try:
-        await message.bot.delete_message(message.chat.id, tmp.message_id)
-    except (TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError):
-        pass
+def masterclass_hub_kb() -> ReplyKeyboardMarkup:
+    kb = ReplyKeyboardBuilder()
+    kb.button(text=BTN_BACK)
+    kb.adjust(1)
+    return kb.as_markup(resize_keyboard=True, is_persistent=True)
 
 
 async def send_main_menu_message(message: Message, text: str) -> None:
-    """Убирает «залипшую» reply-клавиатуру и показывает актуальное главное меню."""
-    await _strip_reply_keyboard(message)
+    """Главное меню. Новая reply-клавиатура от Telegram подменяет предыдущую — отдельный Remove не шлём."""
     await message.answer(text, reply_markup=await main_menu_kb(message.from_user))
+
+
+async def ensure_main_menu_keyboard(message: Message) -> None:
+    """Обновить нижнюю клавиатуру без лишнего текста (легаси-подписи у пользователя)."""
+    try:
+        await message.answer("\u2060", reply_markup=await main_menu_kb(message.from_user))
+    except TelegramNetworkError:
+        return
 
 
 def cancel_only_kb() -> ReplyKeyboardMarkup:
@@ -203,18 +272,17 @@ class TrackUsersMiddleware(BaseMiddleware):
 def admin_menu_kb() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
     kb.button(text=BTN_ADMIN_NEW_GAME)
+    kb.button(text=BTN_ADMIN_NEW_MASTERCLASS)
     kb.button(text=BTN_ADMIN_PHOTOS)
     kb.button(text=BTN_ADMIN_ADD_CAPO)
     kb.button(text=BTN_ADMIN_BROADCAST)
     kb.button(text=BTN_ADMIN_NOTIFY_GAME)
     kb.button(text=BTN_BACK)
-    kb.adjust(2, 2, 2)
+    kb.adjust(2, 2, 2, 1)
     return kb.as_markup(resize_keyboard=True, is_persistent=True)
 
 
 async def send_admin_panel(message: Message) -> None:
-    """Сбрасывает старую reply-клавиатуру и показывает актуальное админ-меню (Telegram часто кэширует клавиатуру)."""
-    await _strip_reply_keyboard(message)
     await message.answer(html_admin_panel(), reply_markup=admin_menu_kb())
 
 
@@ -238,15 +306,19 @@ def finish_upload_kb() -> ReplyKeyboardMarkup:
 def games_inline_kb(games: list[dict], prefix: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for game in games:
-        builder.button(text=_inline_game_caption(game), callback_data=f"{prefix}:{game['id']}")
+        builder.button(text=inline_event_caption(game), callback_data=f"{prefix}:{game['id']}")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def game_actions_kb(game_id: int) -> InlineKeyboardMarkup:
+def game_actions_kb_for(game: dict) -> InlineKeyboardMarkup:
+    gid = int(game["id"])
+    is_mc = row_kind(game) == GAME_KIND_MASTERCLASS
     builder = InlineKeyboardBuilder()
-    builder.button(text="🪑 За стол", callback_data=f"join:{game_id}")
-    builder.button(text="🚪 Вон из дома", callback_data=f"leave:{game_id}")
+    join_txt = "🎓 Записаться" if is_mc else "🪑 За стол"
+    leave_txt = "🚪 Отменить запись" if is_mc else "🚪 Вон из дома"
+    builder.button(text=join_txt, callback_data=f"join:{gid}")
+    builder.button(text=leave_txt, callback_data=f"leave:{gid}")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -254,7 +326,7 @@ def game_actions_kb(game_id: int) -> InlineKeyboardMarkup:
 def admin_upload_pick_game_kb(games: list[dict]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for game in games:
-        builder.button(text=_inline_game_caption(game), callback_data=f"upload_pick:{game['id']}")
+        builder.button(text=inline_event_caption(game), callback_data=f"upload_pick:{game['id']}")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -262,17 +334,22 @@ def admin_upload_pick_game_kb(games: list[dict]) -> InlineKeyboardMarkup:
 async def compose_game_details(game_id: int) -> str:
     game = await DB.get_game(game_id)
     if not game:
-        return "🎭 <i>Партия не найдена. Возможно, стол уже убрали.</i>"
+        return "🎭 <i>Событие не найдено — возможно, его уже сняли с афиши.</i>"
 
     participants = await DB.get_registrations(game_id)
     count = len(participants)
-    free_slots = max(game["capacity"] - count, 0)
+    free_slots = max(int(game["capacity"]) - count, 0)
     title_esc = html.escape(game["title"])
     when_esc = html.escape(to_user_datetime(game["game_date"]))
-    dir_esc = html.escape(direction_to_human(game["direction"]))
+    lead = "🎓" if row_kind(game) == GAME_KIND_MASTERCLASS else "🎴"
+    participants_title = (
+        "<i>Пока пусто — будь первым у дверей.</i>"
+        if row_kind(game) == GAME_KIND_MASTERCLASS
+        else "<i>Пока никого — только пустые стулья.</i>"
+    )
 
     if not participants:
-        block = "<i>Пока никого — только пустые стулья.</i>"
+        block = participants_title
     else:
         lines: list[str] = []
         for idx, user in enumerate(participants, start=1):
@@ -283,26 +360,39 @@ async def compose_game_details(game_id: int) -> str:
 
     return format_game_card(
         title=title_esc,
+        lead_emoji=lead,
         when=when_esc,
-        direction=dir_esc,
+        type_line_html=row_type_line_html(game),
         count=count,
         free=free_slots,
+        price_line_html=row_price_html(game),
         participants_block=block,
     )
 
 
-@ROUTER.message(Command("start"))
+@ROUTER.message(Command("start", ignore_mention=True))
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await send_main_menu_message(message, html_welcome())
 
 
-@ROUTER.message(Command("menu"))
+@ROUTER.message(Command("menu", ignore_mention=True))
 async def cmd_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
     await send_main_menu_message(
         message,
         "<b>⌨️ Клавиатура обновлена.</b>\n" + html_main_menu_hint(),
+    )
+
+
+@ROUTER.message(F.text.func(is_version_slash_command))
+async def cmd_version(message: Message) -> None:
+    """Диагностика деплоя: /version и /version@BotName (часто в группах)."""
+    await message.answer(
+        f"Версия кода: {MENU_BUILD_TAG}\n"
+        "Если до этого вместо этого приходило «только через меню» — на сервере была старая сборка "
+        "или второй процесс с тем же токеном.",
+        parse_mode=None,
     )
 
 
@@ -312,9 +402,41 @@ async def back_to_menu(message: Message, state: FSMContext) -> None:
     await send_main_menu_message(message, html_main_menu_hint())
 
 
+@ROUTER.message(F.text.in_({BTN_MAFIA, LEGACY_MAFIA}))
+async def mafia_hub(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(html_mafia_hub(), reply_markup=mafia_hub_kb())
+
+
+@ROUTER.message(
+    F.text.in_(
+        {
+            BTN_MASTERCLASS,
+            BTN_MASTERCLASS_SHORT,
+            LEGACY_MASTERCLASS,
+            LEGACY_MASTERCLASS_ALT,
+            LEGACY_MASTERCLASS_SHORT,
+        }
+    ),
+)
+async def masterclass_hub(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    games = await DB.get_upcoming_games(now_iso(), kind=GAME_KIND_MASTERCLASS)
+    await message.answer(html_masterclass_hub(), reply_markup=masterclass_hub_kb())
+    if not games:
+        await message.answer(html_no_masterclasses())
+        return
+    await message.answer(
+        html_pick_masterclass(),
+        reply_markup=games_inline_kb(games, "game"),
+    )
+
+
 @ROUTER.message(F.text.in_({BTN_UPCOMING, LEGACY_UPCOMING}))
 async def upcoming_games(message: Message) -> None:
-    games = await DB.get_upcoming_games(now_iso())
+    if (message.text or "").strip() == LEGACY_UPCOMING:
+        await ensure_main_menu_keyboard(message)
+    games = await DB.get_upcoming_games(now_iso(), kind=GAME_KIND_MAFIA)
     if not games:
         await message.answer(html_no_upcoming())
         return
@@ -327,8 +449,12 @@ async def upcoming_games(message: Message) -> None:
 @ROUTER.callback_query(F.data.startswith("game:"))
 async def show_game(call: CallbackQuery) -> None:
     game_id = int(call.data.split(":")[1])
+    game = await DB.get_game(game_id)
+    if not game:
+        await call.answer("Событие не найдено.", show_alert=True)
+        return
     text = await compose_game_details(game_id)
-    await call.message.answer(text, reply_markup=game_actions_kb(game_id))
+    await call.message.answer(text, reply_markup=game_actions_kb_for(game))
     await call.answer()
 
 
@@ -344,9 +470,10 @@ async def join_game(call: CallbackQuery) -> None:
         username=user.username,
     )
     details = await compose_game_details(game_id)
+    game = await DB.get_game(game_id)
     await call.message.answer(text, parse_mode=None)
-    if ok:
-        await call.message.answer(details, reply_markup=game_actions_kb(game_id))
+    if ok and game:
+        await call.message.answer(details, reply_markup=game_actions_kb_for(game))
     await call.answer()
 
 
@@ -355,14 +482,17 @@ async def leave_game(call: CallbackQuery) -> None:
     game_id = int(call.data.split(":")[1])
     ok, text = await DB.unregister_user(game_id=game_id, user_id=call.from_user.id)
     details = await compose_game_details(game_id)
+    game = await DB.get_game(game_id)
     await call.message.answer(text, parse_mode=None)
-    if ok:
-        await call.message.answer(details, reply_markup=game_actions_kb(game_id))
+    if ok and game:
+        await call.message.answer(details, reply_markup=game_actions_kb_for(game))
     await call.answer()
 
 
 @ROUTER.message(F.text.in_({BTN_PAST, LEGACY_PAST}))
 async def past_games(message: Message) -> None:
+    if (message.text or "").strip() == LEGACY_PAST:
+        await ensure_main_menu_keyboard(message)
     games = await DB.get_past_games(now_iso())
     if not games:
         await message.answer(html_no_past())
@@ -406,6 +536,8 @@ async def show_past_game(call: CallbackQuery) -> None:
 
 @ROUTER.message(F.text.in_({BTN_CALENDAR, LEGACY_CALENDAR}))
 async def calendar_games(message: Message) -> None:
+    if (message.text or "").strip() == LEGACY_CALENDAR:
+        await ensure_main_menu_keyboard(message)
     games = await DB.get_upcoming_games(now_iso())
     if not games:
         await message.answer(html_calendar_empty())
@@ -422,11 +554,21 @@ async def calendar_games(message: Message) -> None:
         reg_count = reg_by_game.get(gid, 0)
         cap = int(game["capacity"])
         free = max(cap - reg_count, 0)
+        price_show = html.escape(price_s) if (price_s := (game.get("price_text") or "").strip()) else "<i>не указана</i>"
+        badge = "🎓" if row_kind(game) == GAME_KIND_MASTERCLASS else "🎴"
+        if row_kind(game) == GAME_KIND_MASTERCLASS:
+            type_line = "<b>🎓 Мастер-класс</b>"
+        else:
+            type_line = (
+                "Стол: "
+                f"<i>{html.escape(direction_to_human(game['direction']))}</i>"
+            )
         block = (
-            f"• <b>{html.escape(day_key)}</b> · <code>{dt.strftime('%H:%M')}</code>\n"
+            f"{badge} • <b>{html.escape(day_key)}</b> · <code>{dt.strftime('%H:%M')}</code>\n"
             f"  <b>{html.escape(game['title'])}</b>\n"
             f"  🪑 <b>Свободно мест:</b> {free} · <b>Всего мест:</b> {cap}\n"
-            f"  Стол: <i>{html.escape(direction_to_human(game['direction']))}</i>"
+            f"  💰 <b>Стоимость:</b> {price_show}\n"
+            f"  {type_line}"
         )
         grouped.setdefault(day_key, []).append(block)
 
@@ -442,7 +584,7 @@ async def calendar_games(message: Message) -> None:
     await message.answer("\n".join(lines).rstrip())
 
 
-@ROUTER.message(Command("admin"))
+@ROUTER.message(Command("admin", ignore_mention=True))
 async def cmd_admin(message: Message) -> None:
     if not await is_admin(message.from_user):
         await message.answer(html_access_denied())
@@ -504,7 +646,6 @@ async def admin_add_admin_login(message: Message, state: FSMContext) -> None:
         added_by_user_id=message.from_user.id,
     )
     await state.clear()
-    await _strip_reply_keyboard(message)
     await message.answer(
         html.escape(reply),
         reply_markup=await main_menu_kb(message.from_user),
@@ -588,12 +729,12 @@ async def admin_notify_game_start(message: Message, state: FSMContext) -> None:
     games = await DB.get_upcoming_games(now_iso())
     if not games:
         await message.answer(
-            "🌃 <i>Сейчас нет запланированных игр — выберите другой способ рассылки.</i>",
+            "🌃 <i>Сейчас ничего не запланировано — выберите другой способ рассылки.</i>",
         )
         return
     await message.answer(
         "<b>📨 Рассылка участникам</b>\n"
-        "Выберите партию — сообщение получат только <b>записавшиеся на эту дату</b>:",
+        "Выберите игру или мастер-класс — сообщение получат только <b>записавшиеся участники</b>:",
         reply_markup=games_inline_kb(games, "notify_game"),
     )
 
@@ -607,10 +748,10 @@ async def admin_notify_game_picked(call: CallbackQuery, state: FSMContext) -> No
     game_id = int(call.data.split(":")[1])
     game = await DB.get_game(game_id)
     if not game:
-        await call.answer("Партия не найдена.", show_alert=True)
+        await call.answer("Событие не найдено.", show_alert=True)
         return
     if game["game_date"] < now_iso():
-        await call.answer("Игра уже в прошлом — выберите другую.", show_alert=True)
+        await call.answer("Событие уже в прошлом — выберите другую.", show_alert=True)
         return
     user_ids = await DB.get_registered_user_ids(game_id)
     n = len(user_ids)
@@ -618,12 +759,12 @@ async def admin_notify_game_picked(call: CallbackQuery, state: FSMContext) -> No
     await state.update_data(notify_game_id=game_id)
     await call.message.answer(
         "<b>📨 Рассылка участникам</b>\n"
-        f"Партия: <b>{html.escape(game['title'])}</b>\n"
+        f"Событие: <b>{html.escape(game['title'])}</b>\n"
         f"Дата: <code>{html.escape(to_user_datetime(game['game_date']))}</code>\n"
         f"Записано: <b>{n}</b>\n\n"
         + (
             "Введите текст объявления (до <b>4096</b> символов). "
-            "Его получат только участники этой игры."
+            "Его получат только участники этого события."
             if n
             else "<i>Пока никто не записан — после текста бот сообщит, что отправить некому.</i> Нажмите «Стоп», если передумали."
         ),
@@ -642,7 +783,7 @@ async def admin_notify_game_send(message: Message, state: FSMContext, bot: Bot) 
         return
     if is_cancel_text(message.text):
         await state.clear()
-        await send_main_menu_message(message, "<i>Рассылка по игре отменена.</i>")
+        await send_main_menu_message(message, "<i>Рассылка отменена.</i>")
         return
     text = message.text.strip()
     if not text:
@@ -660,7 +801,7 @@ async def admin_notify_game_send(message: Message, state: FSMContext, bot: Bot) 
     game = await DB.get_game(int(game_id))
     if not game or game["game_date"] < now_iso():
         await state.clear()
-        await send_main_menu_message(message, "⚠️ Игра недоступна или уже прошла.")
+        await send_main_menu_message(message, "⚠️ Событие недоступно или уже прошло.")
         return
 
     user_ids = await DB.get_registered_user_ids(int(game_id))
@@ -668,7 +809,7 @@ async def admin_notify_game_send(message: Message, state: FSMContext, bot: Bot) 
         await state.clear()
         await send_main_menu_message(
             message,
-            "ℹ️ <i>На эту партию никто не записан — рассылка не нужна.</i>",
+            "ℹ️ <i>На это событие никто не записан — рассылка не нужна.</i>",
         )
         return
 
@@ -691,8 +832,8 @@ async def admin_notify_game_send(message: Message, state: FSMContext, bot: Bot) 
     await state.clear()
     await send_main_menu_message(
         message,
-        "<b>📋 Итог по игре</b>\n"
-        f"Партия: {html.escape(game['title'])}\n"
+        "<b>📋 Итог по рассылке</b>\n"
+        f"Событие: {html.escape(game['title'])}\n"
         f"✅ Доставлено: <b>{ok}</b>\n"
         f"🚫 Заблокировали бота: <b>{blocked}</b>\n"
         f"⚠️ Прочие ошибки: <b>{other_errors}</b>",
@@ -778,14 +919,34 @@ async def admin_add_game_capacity(message: Message, state: FSMContext) -> None:
         await message.answer("⚠️ Мест должно быть больше нуля.")
         return
 
+    await state.update_data(capacity=capacity)
+    await state.set_state(AdminCreateGame.price)
+    await message.answer(
+        "💰 Укажите <b>стоимость участия</b> любым текстом "
+        "(например <code>1500 ₽</code> или <code>Бесплатно для своих</code>).\n"
+        "Если оставите поле условно пустым — отправьте <code>-</code> или слово «нет».",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
+@ROUTER.message(AdminCreateGame.price)
+async def admin_add_game_price(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip().lower()
+    price_text = ""
+    if raw not in {"", "-", "нет", "no", "n/a"}:
+        price_text = (message.text or "").strip()
+
     data = await state.get_data()
     game_id = await DB.add_game(
         title=data["title"],
         game_date_iso=data["game_date_iso"],
         direction=data["direction"],
-        capacity=capacity,
+        capacity=int(data["capacity"]),
+        kind=GAME_KIND_MAFIA,
+        price_text=price_text,
     )
     await state.clear()
+    ph = html.escape(price_text) if price_text else "<i>не указана</i>"
     await send_main_menu_message(
         message,
         "<b>✅ Партия внесена в книгу</b>\n"
@@ -793,7 +954,108 @@ async def admin_add_game_capacity(message: Message, state: FSMContext) -> None:
         f"{html.escape(data['title'])} · "
         f"{html.escape(to_user_datetime(data['game_date_iso']))} · "
         f"{html.escape(direction_to_human(data['direction']))} · "
-        f"мест: <b>{capacity}</b>",
+        f"мест: <b>{data['capacity']}</b>\n"
+        f"💰 стоимость: {ph}",
+    )
+
+
+@ROUTER.message(F.text.in_({BTN_ADMIN_NEW_MASTERCLASS, LEGACY_ADMIN_NEW_MASTERCLASS}))
+async def admin_add_masterclass_start(message: Message, state: FSMContext) -> None:
+    if not await is_admin(message.from_user):
+        await message.answer(html_access_denied())
+        return
+    await state.set_state(AdminCreateMasterclass.title)
+    await message.answer(
+        "<b>➕ Новый мастер-класс</b>\nКак назовём событие?",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
+@ROUTER.message(AdminCreateMasterclass.title)
+async def admin_mc_title(message: Message, state: FSMContext) -> None:
+    if not await is_admin(message.from_user):
+        await state.clear()
+        return
+    title = (message.text or "").strip()
+    if not title:
+        await message.answer("⚠️ Название не может быть пустым.")
+        return
+    await state.update_data(title=title)
+    await state.set_state(AdminCreateMasterclass.date)
+    await message.answer(
+        "📆 Укажите <b>дату и время</b> занятия:\n<code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
+        "<i>Пример:</i> <code>25.05.2026 14:00</code>",
+    )
+
+
+@ROUTER.message(AdminCreateMasterclass.date)
+async def admin_mc_date(message: Message, state: FSMContext) -> None:
+    if not await is_admin(message.from_user):
+        await state.clear()
+        return
+    raw = (message.text or "").strip()
+    try:
+        dt = datetime.strptime(raw, DATE_INPUT_FORMAT)
+    except ValueError:
+        await message.answer("⚠️ Формат не тот. Нужно: <code>25.05.2026 19:00</code>")
+        return
+    if dt <= datetime.now():
+        await message.answer("⚠️ Дата должна быть <b>в будущем</b>.")
+        return
+    await state.update_data(game_date_iso=dt.strftime(DB_DATE_FORMAT))
+    await state.set_state(AdminCreateMasterclass.capacity)
+    await message.answer("🪑 Сколько <b>мест</b>? (число)")
+
+
+@ROUTER.message(AdminCreateMasterclass.capacity)
+async def admin_mc_capacity(message: Message, state: FSMContext) -> None:
+    if not await is_admin(message.from_user):
+        await state.clear()
+        return
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("⚠️ Введите целое число, например <code>20</code>.")
+        return
+    capacity = int(raw)
+    if capacity <= 0:
+        await message.answer("⚠️ Мест должно быть больше нуля.")
+        return
+    await state.update_data(capacity=capacity)
+    await state.set_state(AdminCreateMasterclass.price)
+    await message.answer(
+        "💰 Укажите <b>стоимость участия</b> (или <code>-</code>, если не хотите указывать).",
+    )
+
+
+@ROUTER.message(AdminCreateMasterclass.price)
+async def admin_mc_price(message: Message, state: FSMContext) -> None:
+    if not await is_admin(message.from_user):
+        await state.clear()
+        return
+    raw_ln = (message.text or "").strip().lower()
+    price_text = ""
+    if raw_ln not in {"", "-", "нет", "no", "n/a"}:
+        price_text = (message.text or "").strip()
+
+    data = await state.get_data()
+    game_id = await DB.add_game(
+        title=data["title"],
+        game_date_iso=data["game_date_iso"],
+        direction=MASTERCLASS_DIRECTION_STUB,
+        capacity=int(data["capacity"]),
+        kind=GAME_KIND_MASTERCLASS,
+        price_text=price_text,
+    )
+    await state.clear()
+    ph = html.escape(price_text) if price_text else "<i>не указана</i>"
+    await send_main_menu_message(
+        message,
+        "<b>✅ Мастер-класс добавлен</b>\n"
+        f"<code>ID {game_id}</code>\n"
+        f"{html.escape(data['title'])} · "
+        f"{html.escape(to_user_datetime(data['game_date_iso']))} · "
+        f"мест: <b>{data['capacity']}</b>\n"
+        f"💰 стоимость: {ph}",
     )
 
 
@@ -880,7 +1142,10 @@ async def fallback(message: Message) -> None:
     await send_main_menu_message(
         message,
         "🎭 <b>За столом говорят только через меню.</b>\n"
-        "Выберите кнопку снизу, <code>/menu</code> или <code>/start</code>.",
+        "Выберите кнопку снизу, <code>/menu</code> или <code>/start</code>.\n\n"
+        "<i>Обновляли бота на сервере, а текст и кнопки как раньше? "
+        "Нужен перезапуск процесса после выката (например</i> <code>docker compose up -d --build</code><i>). "
+        "Проверка версии:</i> <code>/version</code>",
     )
 
 
@@ -889,6 +1154,7 @@ async def main() -> None:
     SETTINGS = load_settings()
     DB = Database(SETTINGS.db_path)
     await DB.init()
+    print(f"mafia-telegram-bot start MENU_BUILD_TAG={MENU_BUILD_TAG} db={SETTINGS.db_path!r}")
 
     bot = Bot(
         token=SETTINGS.bot_token,

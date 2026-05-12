@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import aiosqlite
 
+GAME_KIND_MAFIA = "mafia"
+GAME_KIND_MASTERCLASS = "masterclass"
+# Sentinel для NOT NULL колонки direction у мастер-классов (на экран не выводится).
+MASTERCLASS_DIRECTION_STUB = "__mc__"
+
 
 class Database:
     def __init__(self, path: str) -> None:
@@ -65,6 +70,25 @@ class Database:
                 """
             )
             await db.commit()
+        await self._migrate_schema()
+
+    async def _migrate_schema(self) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute("PRAGMA table_info(games)")
+            columns = {row[1] for row in await cursor.fetchall()}
+            if "kind" not in columns:
+                await db.execute(
+                    """
+                    ALTER TABLE games ADD COLUMN kind TEXT NOT NULL DEFAULT 'mafia'
+                    """
+                )
+            if "price_text" not in columns:
+                await db.execute(
+                    """
+                    ALTER TABLE games ADD COLUMN price_text TEXT NOT NULL DEFAULT ''
+                    """
+                )
+            await db.commit()
 
     async def add_game(
         self,
@@ -73,29 +97,48 @@ class Database:
         game_date_iso: str,
         direction: str,
         capacity: int,
+        kind: str = GAME_KIND_MAFIA,
+        price_text: str = "",
     ) -> int:
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
                 """
-                INSERT INTO games (title, game_date, direction, capacity)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO games (title, game_date, direction, capacity, kind, price_text)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (title, game_date_iso, direction, capacity),
+                (
+                    title,
+                    game_date_iso,
+                    direction,
+                    capacity,
+                    kind,
+                    (price_text or "").strip(),
+                ),
             )
             await db.commit()
             return cursor.lastrowid
 
-    async def get_upcoming_games(self, now_iso: str) -> list[dict]:
+    async def get_upcoming_games(self, now_iso: str, *, kind: str | None = None) -> list[dict]:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                """
-                SELECT * FROM games
-                WHERE game_date >= ?
-                ORDER BY game_date ASC
-                """,
-                (now_iso,),
-            )
+            if kind is None:
+                cursor = await db.execute(
+                    """
+                    SELECT * FROM games
+                    WHERE game_date >= ?
+                    ORDER BY game_date ASC
+                    """,
+                    (now_iso,),
+                )
+            else:
+                cursor = await db.execute(
+                    """
+                    SELECT * FROM games
+                    WHERE game_date >= ? AND kind = ?
+                    ORDER BY game_date ASC
+                    """,
+                    (now_iso, kind),
+                )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
@@ -105,10 +148,10 @@ class Database:
             cursor = await db.execute(
                 """
                 SELECT * FROM games
-                WHERE game_date < ?
+                WHERE game_date < ? AND kind = ?
                 ORDER BY game_date DESC
                 """,
-                (now_iso,),
+                (now_iso, GAME_KIND_MAFIA),
             )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
@@ -188,7 +231,7 @@ class Database:
             game_cursor = await db.execute("SELECT capacity FROM games WHERE id = ?", (game_id,))
             game = await game_cursor.fetchone()
             if not game:
-                return False, "Игра не найдена."
+                return False, "Событие не найдено."
 
             count_cursor = await db.execute(
                 "SELECT COUNT(*) FROM registrations WHERE game_id = ?", (game_id,)
@@ -207,10 +250,10 @@ class Database:
                     (game_id, user_id, display_name, username),
                 )
             except aiosqlite.IntegrityError:
-                return False, "Вы уже записаны на эту игру."
+                return False, "Вы уже записаны."
 
             await db.commit()
-            return True, "Вы успешно записались на игру."
+            return True, "Вы успешно записались."
 
     async def unregister_user(self, *, game_id: int, user_id: int) -> tuple[bool, str]:
         async with aiosqlite.connect(self.path) as db:
@@ -220,7 +263,7 @@ class Database:
             )
             await db.commit()
             if cursor.rowcount == 0:
-                return False, "Вы не были записаны на эту игру."
+                return False, "Вы не были записаны на это событие."
             return True, "Ваша запись отменена."
 
     async def add_photo(self, *, game_id: int, file_id: str) -> None:
