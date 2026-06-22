@@ -1,184 +1,80 @@
-"""Тексты и подписи кнопок в духе «Мафии». Шрифт в Telegram задать нельзя — используем HTML и эмодзи."""
+"""Тексты и подписи OPC Events."""
 
 from __future__ import annotations
 
-# Меняем при каждом значимом обновлении меню — по этой строке на /start видно, что деплой подтянул новый код.
-MENU_BUILD_TAG = "hub-main-2026-05e"
+BOT_TITLE = "OPC · Иваново · Ленина"
+BRAND = "OPC"
 
-# ——— Reply keyboard (точное совпадение в F.text) ———
-BTN_MAFIA = "🎭 Мафия"
-# Две подписи на главной: часть клиентов съедает длинный ряд — дублируем короче.
-BTN_MASTERCLASS = "🎓 Мастер-классы"
-BTN_MASTERCLASS_SHORT = "🎓 Мастер-класс"
-BTN_CALENDAR = "📅 Календарь"
-BTN_ADMIN = "🎩 Кабинет Дона"
+MENU_BUILD_TAG = "opc-events-2026-06"
 
-BTN_UPCOMING = "🎴 Набор на стол"
-BTN_PAST = "🌑 Архив партий"
+VISIBILITY_OPEN_TEXT = "🔓 Открытая — может присоединиться любой"
+VISIBILITY_APPROVAL_TEXT = "🔒 По согласованию с организатором"
 
-BTN_BACK = "🏙 На площадь"
-BTN_HOME_FROM_SECTION = BTN_BACK
+CB_MENU_GAMES = "menu:games"
+CB_MENU_MASTERCLASS = "menu:masterclass"
+CB_MENU_CALENDAR = "menu:calendar"
+CB_NAV_MAIN = "nav:main"
 
-BTN_ADMIN_NEW_GAME = "➕ Новая партия"
-BTN_ADMIN_NEW_MASTERCLASS = "➕ Новый мастер-класс"
-BTN_ADMIN_PHOTOS = "📷 Досье (фото)"
-BTN_ADMIN_ADD_CAPO = "🤝 Вербовка"
-BTN_ADMIN_BROADCAST = "📣 Созвать город"
-BTN_ADMIN_NOTIFY_GAME = "📨 Рассылка участникам"
+CB_GAMES_MAFIA = "games:mafia"
+CB_GAMES_CODENAMES = "games:codenames"
 
-BTN_CANCEL = "✖️ Стоп"
-BTN_FINISH_UPLOAD = "✅ Дело закрыто"
+CB_CREATE_PREFIX = "create:"
+CB_EVENT_VIEW_PREFIX = "event:view:"
+CB_EVENT_CHAT_PREFIX = "event:chat:"
+CB_EVENT_CLOSE_PREFIX = "event:close:"
+CB_EVENT_REOPEN_PREFIX = "event:reopen:"
+CB_EVENT_DELETE_PREFIX = "event:delete:"
 
-BTN_DIR_ADULT = "🎩 Взрослая"
-BTN_DIR_CHILD = "🧒 Детская"
+CB_SLOT_JOIN_PREFIX = "slot:join:"
+CB_SLOT_LEAVE_PREFIX = "slot:leave:"
 
-# Старые подписи до смены оформления (Telegram долго держит прошлую клавиатуру)
-LEGACY_MAFIA = "Мафия"
-LEGACY_MASTERCLASS = "Мастер-классы"
-LEGACY_MASTERCLASS_ALT = "Мастер классы"
-LEGACY_MASTERCLASS_SHORT = "Мастер класс"
+CB_APPROVE_PREFIX = "approve:"
+CB_REJECT_PREFIX = "reject:"
 
-LEGACY_UPCOMING = "Предстоящие игры"
-LEGACY_PAST = "Прошедшие игры"
-LEGACY_CALENDAR = "Календарь игр"
-LEGACY_ADMIN = "Админ-панель"
-LEGACY_BACK = "Назад в меню"
+CB_VIS_OPEN = "vis:open"
+CB_VIS_APPROVAL = "vis:approval"
 
-LEGACY_ADMIN_NEW_GAME = "Добавить игру"
-LEGACY_ADMIN_NEW_MASTERCLASS = "Добавить мастер-класс"
-LEGACY_ADMIN_PHOTOS = "Загрузить фото"
-LEGACY_ADMIN_ADD_CAPO = "Добавить админа"
-LEGACY_ADMIN_BROADCAST = "Сделать рассылку"
-
-LEGACY_CANCEL = "Отмена"
-LEGACY_FINISH_UPLOAD = "Завершить загрузку"
-LEGACY_DIR_ADULT = "Взрослая"
-LEGACY_DIR_CHILD = "Детская"
+CB_OPEN_CARD_PREFIX = "open_card:"
 
 
-def is_cancel_text(text: str | None) -> bool:
-    s = (text or "").strip()
-    return s in (BTN_CANCEL, LEGACY_CANCEL)
+def event_type_icon(event_type: str) -> str:
+    return {
+        "mafia": "🌙",
+        "codenames": "🕵",
+        "masterclass": "🎨",
+    }.get(event_type, "🎪")
 
 
-def resolve_direction_choice(text: str | None) -> str | None:
-    """'adult' | 'child' | None"""
-    s = (text or "").strip()
-    if s in (BTN_DIR_ADULT, LEGACY_DIR_ADULT):
-        return "adult"
-    if s in (BTN_DIR_CHILD, LEGACY_DIR_CHILD):
-        return "child"
-    return None
+def event_type_label(event_type: str) -> str:
+    return {
+        "mafia": "Мафия",
+        "codenames": "Коднеймс",
+        "masterclass": "Мастер-класс",
+    }.get(event_type, "Мероприятие")
 
 
-def divider() -> str:
-    return "──────────────"
+def visibility_icon(visibility: str) -> str:
+    return "🔓" if visibility == "open" else "🔒"
 
 
-def html_banner() -> str:
-    return (
-        "<b>🎭 ЗА СТОЛОМ</b>\n"
-        f"<code>{divider()}</code>\n"
-        "<i>Город засыпает. Просыпается мафия…</i>"
-    )
+def format_date(date_str: str) -> str:
+    y, m, d = date_str.split("-")
+    return f"{d}.{m}"
 
 
-def html_welcome() -> str:
-    return (
-        f"{html_banner()}\n\n"
-        "Добро пожаловать. Снизу кнопки: <b>Мафия</b>, <b>Мастер-класс</b>, <b>Календарь</b> "
-        "(админам ещё <b>Кабинет Дона</b>).\n\n"
-        "<i>Кнопки не обновились —</i> <code>/menu</code> <i>или</i> <code>/start</code>.\n"
-        "<i>Отдельная проверка, что сервер обновлён:</i> <code>/version</code>\n\n"
-        f"<b>Версия бота:</b> <code>{MENU_BUILD_TAG}</code>"
-    )
-
-
-def html_main_menu_hint() -> str:
-    return "<b>🏙 Главная площадь</b>\n<i>Что делаем?</i>"
-
-
-def html_pick_game() -> str:
-    return "<b>🎴 Выберите партию</b>\n<code>— стол готов к набору —</code>"
-
-
-def html_mafia_hub() -> str:
-    return (
-        "<b>🎭 Мафия</b>\n"
-        "<code>──────────────</code>\n"
-        "<i>Набор на стол или история городских игр.</i>"
-    )
-
-
-def html_masterclass_hub() -> str:
-    return (
-        "<b>🎓 Мастер-классы</b>\n"
-        "<code>──────────────</code>\n"
-        "<i>Выберите ближайшее занятие — запись как к столу.</i>"
-    )
-
-
-def html_no_masterclasses() -> str:
-    return "🌙 <i>Мастер-классов пока не объявили — загляните позже.</i>"
-
-
-def html_pick_masterclass() -> str:
-    return "<b>🎓 Выберите мастер-класс</b>"
-
-
-def html_no_upcoming() -> str:
-    return "🌃 <i>Сейчас тихо: набора на стол нет.</i>"
-
-
-def html_no_past() -> str:
-    return "📜 <i>Архив пуст — прошлых записей ещё нет.</i>"
-
-
-def html_pick_past() -> str:
-    return "<b>🌑 Прошлая партия</b>\nВыберите запись из архива:"
-
-
-def html_calendar_empty() -> str:
-    return "📅 <i>В календаре пусто.</i>"
-
-
-def html_access_denied() -> str:
-    return "🚫 <b>Доступ закрыт.</b>\n<i>Сюда только свои.</i>"
-
-
-def html_admin_panel() -> str:
-    return (
-        f"{html_banner()}\n\n"
-        "<b>🎩 Кабинет Дона</b>\n"
-        "<i>Распоряжайтесь.</i>"
-    )
-
-
-def format_calendar_header() -> str:
-    return (
-        "<b>📅 Календарь</b>\n"
-        "<i>Игры мафии и мастер-классы; для каждого события — места, стоимость (если задана), тип.</i>"
-    )
-
-
-def format_game_card(
+def format_event_line(
     *,
+    event_type: str,
     title: str,
-    lead_emoji: str = "🎴",
-    when: str,
-    type_line_html: str,
-    count: int,
-    free: int,
-    price_line_html: str,
-    participants_block: str,
+    event_date: str,
+    event_time: str,
+    filled: int,
+    max_players: int,
+    visibility: str | None = None,
 ) -> str:
+    icon = event_type_icon(event_type)
+    vis = f"{visibility_icon(visibility)} " if visibility else ""
     return (
-        f"<b>{lead_emoji} {title}</b>\n"
-        f"<code>{divider()}</code>\n"
-        f"📆 <b>Когда:</b> {when}\n"
-        f"{type_line_html}\n"
-        f"💰 <b>Стоимость участия:</b> {price_line_html}\n"
-        f"👥 <b>За столом:</b> {count}\n"
-        f"🪑 <b>Свободно мест:</b> {free}\n\n"
-        f"<b>Список записавшихся:</b>\n{participants_block}"
+        f"{vis}{icon} {title} · {format_date(event_date)} · "
+        f"{event_time} · {filled}/{max_players}"
     )

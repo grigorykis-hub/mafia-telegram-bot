@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import aiosqlite
+from datetime import datetime
 
-GAME_KIND_MAFIA = "mafia"
-GAME_KIND_MASTERCLASS = "masterclass"
-# Sentinel для NOT NULL колонки direction у мастер-классов (на экран не выводится).
-MASTERCLASS_DIRECTION_STUB = "__mc__"
+EVENT_TYPE_MAFIA = "mafia"
+EVENT_TYPE_CODENAMES = "codenames"
+EVENT_TYPE_MASTERCLASS = "masterclass"
+
+SIGNUP_CONFIRMED = "confirmed"
+SIGNUP_PENDING = "pending"
+
+EVENT_OPEN = "open"
+EVENT_CLOSED = "closed"
+
+VISIBILITY_OPEN = "open"
+VISIBILITY_APPROVAL = "approval"
 
 
 class Database:
@@ -14,49 +23,41 @@ class Database:
 
     async def init(self) -> None:
         async with aiosqlite.connect(self.path) as db:
+            # Удаляем только наследие старого бота мафии
+            await db.execute("DROP TABLE IF EXISTS registrations")
+            await db.execute("DROP TABLE IF EXISTS photos")
+            await db.execute("DROP TABLE IF EXISTS games")
+            await db.execute("DROP TABLE IF EXISTS dynamic_admins")
             await db.execute(
                 """
-                CREATE TABLE IF NOT EXISTS games (
+                CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
                     title TEXT NOT NULL,
-                    game_date TEXT NOT NULL,
-                    direction TEXT NOT NULL,
-                    capacity INTEGER NOT NULL CHECK(capacity > 0),
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    event_date TEXT NOT NULL,
+                    event_time TEXT NOT NULL,
+                    max_players INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    visibility TEXT NOT NULL DEFAULT 'open',
+                    creator_id INTEGER NOT NULL,
+                    creator_name TEXT NOT NULL,
+                    thread_id INTEGER,
+                    created_at TEXT NOT NULL
                 )
                 """
             )
             await db.execute(
                 """
-                CREATE TABLE IF NOT EXISTS registrations (
+                CREATE TABLE IF NOT EXISTS signups (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    game_id INTEGER NOT NULL,
+                    event_id INTEGER NOT NULL,
                     user_id INTEGER NOT NULL,
                     display_name TEXT NOT NULL,
-                    username TEXT,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(game_id, user_id),
-                    FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
-                )
-                """
-            )
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS photos (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    game_id INTEGER NOT NULL,
-                    file_id TEXT NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
-                )
-                """
-            )
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS dynamic_admins (
-                    username_lower TEXT PRIMARY KEY NOT NULL,
-                    added_by_user_id INTEGER,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    status TEXT NOT NULL DEFAULT 'confirmed',
+                    signed_at TEXT NOT NULL,
+                    UNIQUE(event_id, user_id),
+                    FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE
                 )
                 """
             )
@@ -70,222 +71,197 @@ class Database:
                 """
             )
             await db.commit()
-        await self._migrate_schema()
 
-    async def _migrate_schema(self) -> None:
-        async with aiosqlite.connect(self.path) as db:
-            cursor = await db.execute("PRAGMA table_info(games)")
-            columns = {row[1] for row in await cursor.fetchall()}
-            if "kind" not in columns:
-                await db.execute(
-                    """
-                    ALTER TABLE games ADD COLUMN kind TEXT NOT NULL DEFAULT 'mafia'
-                    """
-                )
-            if "price_text" not in columns:
-                await db.execute(
-                    """
-                    ALTER TABLE games ADD COLUMN price_text TEXT NOT NULL DEFAULT ''
-                    """
-                )
-            await db.commit()
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    async def add_game(
+    @staticmethod
+    def event_datetime(event: dict) -> datetime:
+        return datetime.strptime(
+            f"{event['event_date']} {event['event_time']}",
+            "%Y-%m-%d %H:%M",
+        )
+
+    async def create_event(
         self,
         *,
+        chat_id: int,
+        event_type: str,
         title: str,
-        game_date_iso: str,
-        direction: str,
-        capacity: int,
-        kind: str = GAME_KIND_MAFIA,
-        price_text: str = "",
+        event_date: str,
+        event_time: str,
+        max_players: int,
+        visibility: str,
+        creator_id: int,
+        creator_name: str,
+        thread_id: int | None = None,
     ) -> int:
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
                 """
-                INSERT INTO games (title, game_date, direction, capacity, kind, price_text)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO events (
+                    chat_id, event_type, title, event_date, event_time,
+                    max_players, status, visibility, creator_id, creator_name,
+                    thread_id, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
                 """,
                 (
+                    chat_id,
+                    event_type,
                     title,
-                    game_date_iso,
-                    direction,
-                    capacity,
-                    kind,
-                    (price_text or "").strip(),
+                    event_date,
+                    event_time,
+                    max_players,
+                    visibility,
+                    creator_id,
+                    creator_name,
+                    thread_id,
+                    self._now_iso(),
                 ),
             )
             await db.commit()
-            return cursor.lastrowid
+            return int(cursor.lastrowid)
 
-    async def get_upcoming_games(self, now_iso: str, *, kind: str | None = None) -> list[dict]:
+    async def set_thread_id(self, event_id: int, thread_id: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE events SET thread_id = ? WHERE id = ?",
+                (thread_id, event_id),
+            )
+            await db.commit()
+
+    async def get_event(self, event_id: int) -> dict | None:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
-            if kind is None:
+            cursor = await db.execute("SELECT * FROM events WHERE id = ?", (event_id,))
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def delete_event(self, event_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute("DELETE FROM events WHERE id = ?", (event_id,))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def set_event_status(self, event_id: int, status: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE events SET status = ? WHERE id = ?",
+                (status, event_id),
+            )
+            await db.commit()
+
+    async def get_upcoming_events(
+        self,
+        *,
+        event_type: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        now = datetime.now()
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            if event_type:
                 cursor = await db.execute(
                     """
-                    SELECT * FROM games
-                    WHERE game_date >= ?
-                    ORDER BY game_date ASC
+                    SELECT * FROM events
+                    WHERE event_type = ?
+                    ORDER BY event_date ASC, event_time ASC
                     """,
-                    (now_iso,),
+                    (event_type,),
                 )
             else:
                 cursor = await db.execute(
                     """
-                    SELECT * FROM games
-                    WHERE game_date >= ? AND kind = ?
-                    ORDER BY game_date ASC
-                    """,
-                    (now_iso, kind),
+                    SELECT * FROM events
+                    ORDER BY event_date ASC, event_time ASC
+                    """
                 )
             rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+        upcoming = [dict(r) for r in rows if self.event_datetime(dict(r)) >= now]
+        if limit is not None:
+            return upcoming[:limit]
+        return upcoming
 
-    async def get_past_games(self, now_iso: str) -> list[dict]:
+    async def count_upcoming_by_type(self, event_type: str) -> int:
+        return len(await self.get_upcoming_events(event_type=event_type))
+
+    async def get_signups(self, event_id: int) -> list[dict]:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
-                SELECT * FROM games
-                WHERE game_date < ? AND kind = ?
-                ORDER BY game_date DESC
+                SELECT * FROM signups
+                WHERE event_id = ?
+                ORDER BY signed_at ASC
                 """,
-                (now_iso, GAME_KIND_MAFIA),
+                (event_id,),
             )
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+            return [dict(r) for r in await cursor.fetchall()]
 
-    async def get_game(self, game_id: int) -> dict | None:
+    async def get_confirmed_signups(self, event_id: int) -> list[dict]:
+        signups = await self.get_signups(event_id)
+        return [s for s in signups if s["status"] == SIGNUP_CONFIRMED]
+
+    async def confirmed_count(self, event_id: int) -> int:
+        return len(await self.get_confirmed_signups(event_id))
+
+    async def get_signup(self, event_id: int, user_id: int) -> dict | None:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
-            cursor = await db.execute("SELECT * FROM games WHERE id = ?", (game_id,))
+            cursor = await db.execute(
+                """
+                SELECT * FROM signups
+                WHERE event_id = ? AND user_id = ?
+                """,
+                (event_id, user_id),
+            )
             row = await cursor.fetchone()
             return dict(row) if row else None
 
-    async def get_registrations(self, game_id: int) -> list[dict]:
-        async with aiosqlite.connect(self.path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                """
-                SELECT user_id, display_name, username
-                FROM registrations
-                WHERE game_id = ?
-                ORDER BY created_at ASC
-                """,
-                (game_id,),
-            )
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
-
-    async def get_registered_user_ids(self, game_id: int) -> list[int]:
-        async with aiosqlite.connect(self.path) as db:
-            cursor = await db.execute(
-                """
-                SELECT user_id FROM registrations
-                WHERE game_id = ?
-                ORDER BY created_at ASC
-                """,
-                (game_id,),
-            )
-            rows = await cursor.fetchall()
-            return [int(row[0]) for row in rows]
-
-    async def get_registration_count(self, game_id: int) -> int:
-        async with aiosqlite.connect(self.path) as db:
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM registrations WHERE game_id = ?", (game_id,)
-            )
-            row = await cursor.fetchone()
-            return int(row[0]) if row else 0
-
-    async def get_registration_counts(self, game_ids: list[int]) -> dict[int, int]:
-        if not game_ids:
-            return {}
-        out = {int(gid): 0 for gid in game_ids}
-        placeholders = ",".join("?" * len(game_ids))
-        async with aiosqlite.connect(self.path) as db:
-            cursor = await db.execute(
-                f"""
-                SELECT game_id, COUNT(*) AS c FROM registrations
-                WHERE game_id IN ({placeholders})
-                GROUP BY game_id
-                """,
-                game_ids,
-            )
-            rows = await cursor.fetchall()
-            for game_id, c in rows:
-                out[int(game_id)] = int(c)
-        return out
-
-    async def register_user(
+    async def add_signup(
         self,
         *,
-        game_id: int,
+        event_id: int,
         user_id: int,
         display_name: str,
-        username: str | None,
-    ) -> tuple[bool, str]:
+        status: str = SIGNUP_CONFIRMED,
+    ) -> bool:
         async with aiosqlite.connect(self.path) as db:
-            db.row_factory = aiosqlite.Row
-            game_cursor = await db.execute("SELECT capacity FROM games WHERE id = ?", (game_id,))
-            game = await game_cursor.fetchone()
-            if not game:
-                return False, "Событие не найдено."
-
-            count_cursor = await db.execute(
-                "SELECT COUNT(*) FROM registrations WHERE game_id = ?", (game_id,)
-            )
-            count_row = await count_cursor.fetchone()
-            current_count = int(count_row[0]) if count_row else 0
-            if current_count >= int(game["capacity"]):
-                return False, "Свободных мест уже нет."
-
             try:
                 await db.execute(
                     """
-                    INSERT INTO registrations (game_id, user_id, display_name, username)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO signups (event_id, user_id, display_name, status, signed_at)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                    (game_id, user_id, display_name, username),
+                    (event_id, user_id, display_name, status, self._now_iso()),
                 )
+                await db.commit()
+                return True
             except aiosqlite.IntegrityError:
-                return False, "Вы уже записаны."
+                return False
 
-            await db.commit()
-            return True, "Вы успешно записались."
-
-    async def unregister_user(self, *, game_id: int, user_id: int) -> tuple[bool, str]:
+    async def remove_signup(self, event_id: int, user_id: int) -> bool:
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
-                "DELETE FROM registrations WHERE game_id = ? AND user_id = ?",
-                (game_id, user_id),
+                "DELETE FROM signups WHERE event_id = ? AND user_id = ?",
+                (event_id, user_id),
             )
             await db.commit()
-            if cursor.rowcount == 0:
-                return False, "Вы не были записаны на это событие."
-            return True, "Ваша запись отменена."
+            return cursor.rowcount > 0
 
-    async def add_photo(self, *, game_id: int, file_id: str) -> None:
-        async with aiosqlite.connect(self.path) as db:
-            await db.execute(
-                "INSERT INTO photos (game_id, file_id) VALUES (?, ?)",
-                (game_id, file_id),
-            )
-            await db.commit()
-
-    async def get_photos(self, game_id: int) -> list[str]:
+    async def set_signup_status(self, event_id: int, user_id: int, status: str) -> bool:
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
                 """
-                SELECT file_id FROM photos
-                WHERE game_id = ?
-                ORDER BY created_at ASC
+                UPDATE signups SET status = ?
+                WHERE event_id = ? AND user_id = ?
                 """,
-                (game_id,),
+                (status, event_id, user_id),
             )
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
+            await db.commit()
+            return cursor.rowcount > 0
 
     async def touch_user(self, *, user_id: int, username: str | None) -> None:
         async with aiosqlite.connect(self.path) as db:
@@ -300,40 +276,3 @@ class Database:
                 (user_id, username),
             )
             await db.commit()
-
-    async def get_known_user_ids(self) -> list[int]:
-        async with aiosqlite.connect(self.path) as db:
-            cursor = await db.execute("SELECT user_id FROM known_users ORDER BY user_id ASC")
-            rows = await cursor.fetchall()
-            return [int(row[0]) for row in rows]
-
-    async def is_dynamic_admin(self, username_lower: str) -> bool:
-        if not username_lower:
-            return False
-        async with aiosqlite.connect(self.path) as db:
-            cursor = await db.execute(
-                "SELECT 1 FROM dynamic_admins WHERE username_lower = ? LIMIT 1",
-                (username_lower,),
-            )
-            row = await cursor.fetchone()
-            return row is not None
-
-    async def add_dynamic_admin(
-        self,
-        *,
-        username_lower: str,
-        added_by_user_id: int,
-    ) -> tuple[bool, str]:
-        async with aiosqlite.connect(self.path) as db:
-            try:
-                await db.execute(
-                    """
-                    INSERT INTO dynamic_admins (username_lower, added_by_user_id)
-                    VALUES (?, ?)
-                    """,
-                    (username_lower, added_by_user_id),
-                )
-            except aiosqlite.IntegrityError:
-                return False, "Этот логин уже в списке администраторов."
-            await db.commit()
-            return True, f"Админские права для @{username_lower} добавлены."

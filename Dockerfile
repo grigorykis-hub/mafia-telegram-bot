@@ -4,7 +4,7 @@ FROM python:3.12-slim-bookworm
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 # SQLite на отдельном томе, чтобы база не терялась при пересборке контейнера
-ENV DB_PATH=/data/mafia_bot.db
+ENV DB_PATH=/data/opc_bot.db
 
 RUN mkdir -p /data
 
