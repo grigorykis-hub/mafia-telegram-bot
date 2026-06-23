@@ -17,9 +17,12 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    MenuButtonWebApp,
     Message,
+    ReplyKeyboardRemove,
     TelegramObject,
     User,
+    WebAppInfo,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -61,12 +64,31 @@ from theme import (
     MENU_BUILD_TAG,
     VISIBILITY_APPROVAL_TEXT,
     VISIBILITY_OPEN_TEXT,
+    build_main_menu_html,
+    event_button_label,
     event_type_icon,
     event_type_label,
     format_date,
+    format_event_card_html,
     format_event_line,
     visibility_icon,
 )
+from web_server import start_webapp_server
+
+# Старые reply-кнопки прошлой версии бота — снимаем клавиатуру и ведём в новое меню.
+LEGACY_REPLY_BUTTONS = {
+    "🎴 Набор на стол",
+    "🌑 Архив партий",
+    "📅 Календарь",
+    "🎩 Кабинет Дона",
+    "Предстоящие игры",
+    "Прошедшие игры",
+    "Календарь игр",
+    "Мафия",
+    "Мастер-классы",
+    "Назад в меню",
+    "🏙 На площадь",
+}
 
 ROUTER = Router()
 DB: Database
@@ -127,37 +149,53 @@ async def edit_message(query: CallbackQuery, text: str, markup: InlineKeyboardMa
         await query.message.answer(text, reply_markup=markup)
 
 
+async def strip_old_reply_keyboard(message: Message) -> None:
+    """Убирает залипшую нижнюю клавиатуру старого бота."""
+    try:
+        await message.answer(" ", reply_markup=ReplyKeyboardRemove())
+    except TelegramBadRequest:
+        pass
+
+
 async def build_main_menu_text() -> str:
     events = await DB.get_upcoming_events(limit=3)
-    lines = [
-        f"☕ {BOT_TITLE}",
-        "",
-        "Твоя кофейня — твои игры 🎲",
-        "",
-        "━━━━━━━━━━━━━━━━",
-        "📍 Ближайшие мероприятия:",
-    ]
-    if not events:
-        lines.append("<i>Пока ничего не запланировано.</i>")
-    else:
-        for ev in events:
-            filled = await DB.confirmed_count(int(ev["id"]))
-            lines.append(
-                format_event_line(
-                    event_type=ev["event_type"],
-                    title=ev["title"],
-                    event_date=ev["event_date"],
-                    event_time=ev["event_time"],
-                    filled=filled,
-                    max_players=int(ev["max_players"]),
-                )
+    blocks: list[str] = []
+    for ev in events:
+        filled = await DB.confirmed_count(int(ev["id"]))
+        blocks.append(
+            format_event_card_html(
+                event_type=ev["event_type"],
+                title=ev["title"],
+                event_date=ev["event_date"],
+                event_time=ev["event_time"],
+                filled=filled,
+                max_players=int(ev["max_players"]),
             )
-    lines.extend(["━━━━━━━━━━━━━━━━", f"<i>v {MENU_BUILD_TAG}</i>"])
-    return "\n".join(lines)
+        )
+    return build_main_menu_html(blocks)
 
 
-def main_menu_kb() -> InlineKeyboardMarkup:
+async def build_main_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    events = await DB.get_upcoming_events(limit=3)
+    for ev in events:
+        filled = await DB.confirmed_count(int(ev["id"]))
+        kb.button(
+            text=event_button_label(
+                event_type=ev["event_type"],
+                title=ev["title"],
+                event_date=ev["event_date"],
+                event_time=ev["event_time"],
+                filled=filled,
+                max_players=int(ev["max_players"]),
+            ),
+            callback_data=f"{CB_EVENT_VIEW_PREFIX}{ev['id']}",
+        )
+    if SETTINGS.webapp_public_url:
+        kb.button(
+            text="📱 Открыть приложение OPC",
+            web_app=WebAppInfo(url=f"{SETTINGS.webapp_public_url}/"),
+        )
     kb.button(text="🎮 Игры", callback_data=CB_MENU_GAMES)
     kb.button(text="🎨 Мастер-классы", callback_data=CB_MENU_MASTERCLASS)
     kb.button(text="📅 Календарь всех мероприятий", callback_data=CB_MENU_CALENDAR)
@@ -166,11 +204,15 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 
 
 async def render_main_menu(query: CallbackQuery) -> None:
-    await edit_message(query, await build_main_menu_text(), main_menu_kb())
+    await edit_message(query, await build_main_menu_text(), await build_main_menu_kb())
 
 
 async def send_main_menu(message: Message) -> None:
-    await message.answer(await build_main_menu_text(), reply_markup=main_menu_kb())
+    await strip_old_reply_keyboard(message)
+    await message.answer(
+        await build_main_menu_text(),
+        reply_markup=await build_main_menu_kb(),
+    )
 
 
 async def render_games_menu(query: CallbackQuery) -> None:
@@ -347,6 +389,67 @@ async def cmd_start_menu(message: Message, state: FSMContext) -> None:
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Создание отменено.")
+    await send_main_menu(message)
+
+
+@ROUTER.message(F.web_app_data)
+async def on_web_app_data(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await strip_old_reply_keyboard(message)
+    action = (message.web_app_data.data or "").strip()
+    if action.startswith(CB_EVENT_VIEW_PREFIX):
+        event_id = int(action.removeprefix(CB_EVENT_VIEW_PREFIX))
+        text, markup = await build_event_card(event_id, message.from_user.id)
+        await message.answer(text, reply_markup=markup)
+        return
+    if action == CB_MENU_GAMES:
+        mafia_n = await DB.count_upcoming_by_type(EVENT_TYPE_MAFIA)
+        codenames_n = await DB.count_upcoming_by_type(EVENT_TYPE_CODENAMES)
+        kb = InlineKeyboardBuilder()
+        kb.button(text=f"🌙 Мафия · {mafia_n} предстоящих", callback_data=CB_GAMES_MAFIA)
+        kb.button(text=f"🕵 Коднеймс · {codenames_n} предстоящих", callback_data=CB_GAMES_CODENAMES)
+        kb.row(*nav_row(CB_NAV_MAIN))
+        await message.answer("🎮 <b>Игры</b>\nВыбери игру:", reply_markup=kb.as_markup())
+        return
+    if action == CB_MENU_MASTERCLASS:
+        kb = InlineKeyboardBuilder()
+        events = await DB.get_upcoming_events(event_type=EVENT_TYPE_MASTERCLASS)
+        for ev in events:
+            filled = await DB.confirmed_count(int(ev["id"]))
+            vis = visibility_icon(ev["visibility"])
+            btn = (
+                f"{vis} {ev['title']} · {format_date(ev['event_date'])} · "
+                f"{ev['event_time']} · {filled}/{ev['max_players']}"
+            )
+            kb.button(text=btn, callback_data=f"{CB_EVENT_VIEW_PREFIX}{ev['id']}")
+        kb.button(text="➕ Создать мероприятие", callback_data=f"{CB_CREATE_PREFIX}{EVENT_TYPE_MASTERCLASS}")
+        kb.row(*nav_row(CB_NAV_MAIN))
+        kb.adjust(1)
+        await message.answer(
+            f"{event_type_icon(EVENT_TYPE_MASTERCLASS)} <b>Мастер-классы</b>\nБлижайшие мероприятия:",
+            reply_markup=kb.as_markup(),
+        )
+        return
+    if action == CB_MENU_CALENDAR:
+        events = await DB.get_upcoming_events()
+        kb = InlineKeyboardBuilder()
+        for ev in events:
+            icon = event_type_icon(ev["event_type"])
+            btn = (
+                f"{icon} {format_date(ev['event_date'])} — "
+                f"{event_type_label(ev['event_type'])} · {ev['title']} · {ev['event_time']}"
+            )
+            kb.button(text=btn, callback_data=f"{CB_EVENT_VIEW_PREFIX}{ev['id']}")
+        kb.button(text="🏠 Главное меню", callback_data=CB_NAV_MAIN)
+        kb.adjust(1)
+        await message.answer("📅 <b>Все мероприятия</b>\nВыбери дату:", reply_markup=kb.as_markup())
+        return
+    await send_main_menu(message)
+
+
+@ROUTER.message(F.text.in_(LEGACY_REPLY_BUTTONS))
+async def legacy_reply_buttons(message: Message, state: FSMContext) -> None:
+    await state.clear()
     await send_main_menu(message)
 
 
@@ -755,6 +858,18 @@ async def main() -> None:
         token=SETTINGS.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+
+    await start_webapp_server(DB, port=SETTINGS.webapp_port)
+    print(f"WebApp server on :{SETTINGS.webapp_port}")
+
+    if SETTINGS.webapp_public_url.startswith("https://"):
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="Меню OPC",
+                web_app=WebAppInfo(url=f"{SETTINGS.webapp_public_url}/"),
+            )
+        )
+
     dp = Dispatcher()
     dp.include_router(ROUTER)
     dp.message.middleware(TrackUsersMiddleware())

@@ -13,6 +13,8 @@ class Settings:
     db_path: str
     group_chat_id: int | None
     group_thread_enabled: bool
+    webapp_public_url: str
+    webapp_port: int
 
 
 def _parse_admin_ids(raw: str) -> set[int]:
@@ -50,6 +52,8 @@ def load_settings() -> Settings:
         group_chat_id = int(group_chat_raw)
 
     db_path = os.getenv("DB_PATH", "opc_bot.db").strip()
+    webapp_public_url = os.getenv("WEBAPP_PUBLIC_URL", "").strip().rstrip("/")
+    webapp_port = int(os.getenv("WEBAPP_PORT", "8080").strip() or "8080")
     return Settings(
         bot_token=token,
         admin_ids=_parse_admin_ids(admin_ids_raw),
@@ -59,4 +63,6 @@ def load_settings() -> Settings:
             os.getenv("GROUP_THREAD_ENABLED", "true"),
             default=True,
         ),
+        webapp_public_url=webapp_public_url,
+        webapp_port=webapp_port,
     )

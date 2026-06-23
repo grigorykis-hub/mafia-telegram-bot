@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 BOT_TITLE = "OPC · Иваново · Ленина"
+LOCATION_LINE = "Иваново · ул. Ленина"
 BRAND = "OPC"
 
-MENU_BUILD_TAG = "opc-events-2026-06"
+MENU_BUILD_TAG = "opc-ui-2026-06"
 
 VISIBILITY_OPEN_TEXT = "🔓 Открытая — может присоединиться любой"
 VISIBILITY_APPROVAL_TEXT = "🔒 По согласованию с организатором"
@@ -60,6 +61,70 @@ def visibility_icon(visibility: str) -> str:
 def format_date(date_str: str) -> str:
     y, m, d = date_str.split("-")
     return f"{d}.{m}"
+
+
+def event_type_short(event_type: str) -> str:
+    return {
+        "mafia": "Мафия",
+        "codenames": "Коднеймс",
+        "masterclass": "МК",
+    }.get(event_type, "Событие")
+
+
+def format_event_card_html(
+    *,
+    event_type: str,
+    title: str,
+    event_date: str,
+    event_time: str,
+    filled: int,
+    max_players: int,
+) -> str:
+    icon = event_type_icon(event_type)
+    label = event_type_short(event_type)
+    return (
+        f"<b>{html_escape(title)}</b>\n"
+        f"<i>{icon} {label} · {format_date(event_date)} · {event_time}</i>  "
+        f"<code>{filled}/{max_players}</code>"
+    )
+
+
+def html_escape(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def build_main_menu_html(event_blocks: list[str]) -> str:
+    lines = [
+        f"<b>{BRAND}</b>",
+        LOCATION_LINE,
+        "<i>Твоя кофейня — твои игры</i>",
+        "",
+        "<b>БЛИЖАЙШИЕ МЕРОПРИЯТИЯ</b>",
+    ]
+    if event_blocks:
+        lines.extend(event_blocks)
+    else:
+        lines.append("<i>Пока ничего не запланировано</i>")
+    lines.extend(["", "<b>РАЗДЕЛЫ</b>", f"<i>{MENU_BUILD_TAG}</i>"])
+    return "\n".join(lines)
+
+
+def event_button_label(
+    *,
+    event_type: str,
+    title: str,
+    event_date: str,
+    event_time: str,
+    filled: int,
+    max_players: int,
+) -> str:
+    icon = event_type_icon(event_type)
+    short_title = title if len(title) <= 22 else title[:21] + "…"
+    return f"{icon} {short_title} · {format_date(event_date)} · {filled}/{max_players}"
 
 
 def format_event_line(
